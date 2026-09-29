@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>3D PLC 컨베이어 스마트 공정 디지털 트윈 시뮬레이터</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+
+<style>
+  :root{
+    --bg-deep:#060a10;
+    --panel-glass: rgba(16,26,38,0.62);
+    --panel-border: rgba(120,200,255,0.18);
+    --accent-cyan:#2fd9ff;
+    --accent-cyan-dim: rgba(47,217,255,0.35);
+    --safety-green:#00e676;
+    --safety-red:#ff3b3b;
+    --safety-amber:#ffb300;
+    --text-main:#dfeaf2;
+    --text-dim:#7f93a3;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; width:100%; height:100%; overflow:hidden;
+    background:var(--bg-deep);
+    font-family: 'Consolas','Segoe UI',ui-monospace,monospace;
+    color:var(--text-main);
+  }
+  #scene-container{position:fixed; inset:0;}
+  canvas{display:block;}
+
+  /* ===== HMI Panel ===== */
+  #hmi-panel{
+    position:fixed; top:22px; left:22px; width:330px;
+    background:var(--panel-glass);
+    border:1px solid var(--panel-border);
+    border-radius:14px;
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06);
+    padding:18px 20px 20px;
+    z-index:10;
+    user-select:none;
+  }
+  #hmi-header{
+    display:flex; align-items:center; justify-content:space-between;
+    padding-bottom:12px; margin-bottom:14px;
+    border-bottom:1px solid rgba(120,200,255,0.14);
+  }
+  #hmi-title{
+    font-size:13px; letter-spacing:0.5px; color:var(--accent-cyan);
+    line-height:1.4;
+  }
+  #hmi-title b{display:block; font-size:15px; color:#fff; font-weight:600;}
+  #status-badge{
+    padding:5px 10px; border-radius:20px; font-size:11px; font-weight:700;
+    letter-spacing:0.5px; white-space:nowrap;
+    transition: all 0.25s ease;
+    border:1px solid rgba(255,255,255,0.15);
+  }
+  .badge-stop{ background:rgba(255,59,59,0.16); color:var(--safety-red); box-shadow:0 0 10px rgba(255,59,59,0.25) inset;}
+  .badge-run{ background:rgba(0,230,118,0.16); color:var(--safety-green); box-shadow:0 0 10px rgba(0,230,118,0.25) inset;}
+  .badge-sensor{ background:rgba(255,179,0,0.18); color:var(--safety-amber); box-shadow:0 0 10px rgba(255,179,0,0.3) inset; animation: badgePulse 0.6s infinite alternate;}
+  @keyframes badgePulse{ from{opacity:1;} to{opacity:0.55;} }
+
+  #btn-row{ display:flex; flex-direction:column; gap:10px; margin-bottom:16px;}
+  .plc-btn{
+    position:relative;
+    padding:12px 14px;
+    border-radius:9px;
+    border:1px solid rgba(255,255,255,0.12);
+    font-family:inherit; font-size:12.5px; font-weight:700; letter-spacing:0.6px;
+    cursor:pointer;
+    color:#08110d;
+    transition: transform 0.08s ease, filter 0.15s ease, box-shadow 0.15s ease;
+    display:flex; align-items:center; gap:10px;
+  }
+  .plc-btn:active{ transform: translateY(1px) scale(0.985); }
+  .plc-btn:disabled{ opacity:0.35; cursor:not-allowed; filter:grayscale(0.4); }
+  .btn-dot{ width:9px; height:9px; border-radius:50%; background:rgba(0,0,0,0.35); flex-shrink:0; }
+
+  #btn-start{ background:linear-gradient(145deg,#28e07a,#0aa855); color:#032414; box-shadow:0 4px 14px rgba(10,168,85,0.35);}
+  #btn-start:not(:disabled):hover{ filter:brightness(1.12); }
+  #btn-stop{ background:linear-gradient(145deg,#ff5b5b,#c81f1f); color:#2b0505; box-shadow:0 4px 14px rgba(200,31,31,0.35);}
+  #btn-stop:not(:disabled):hover{ filter:brightness(1.12); }
+  #btn-defect{ background:linear-gradient(145deg,#ffb648,#e07d00); color:#2b1600; box-shadow:0 4px 14px rgba(224,125,0,0.35);}
+  #btn-defect:not(:disabled):hover{ filter:brightness(1.12); }
+
+  #counter-grid{
+    display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:14px;
+  }
+  .counter-box{
+    background:rgba(4,10,16,0.55);
+    border:1px solid rgba(120,200,255,0.12);
+    border-radius:8px;
+    padding:9px 6px 8px;
+    text-align:center;
+  }
+  .counter-label{ font-size:9.5px; color:var(--text-dim); letter-spacing:1px; margin-bottom:4px;}
+  .counter-value{ font-size:21px; font-weight:700; font-variant-numeric:tabular-nums; text-shadow:0 0 8px currentColor;}
+  #count-total .counter-value{ color:var(--accent-cyan);}
+  #count-pass .counter-value{ color:var(--safety-green);}
+  #count-defect .counter-value{ color:var(--safety-red);}
+
+  #lamp-row{
+    display:flex; justify-content:space-between; align-items:center;
+    background:rgba(4,10,16,0.5);
+    border:1px solid rgba(120,200,255,0.1);
+    border-radius:8px; padding:9px 12px;
+  }
+  .lamp-item{ display:flex; flex-direction:column; align-items:center; gap:5px; }
+  .lamp-led{
+    width:13px; height:13px; border-radius:50%;
+    background:#241010; border:1px solid rgba(255,255,255,0.15);
+    box-shadow: inset 0 0 3px rgba(0,0,0,0.6);
+    transition: all 0.2s ease;
+  }
+  .lamp-led.on-green{ background:radial-gradient(circle at 35% 30%, #b7ffd8, #00e676); box-shadow:0 0 12px 3px rgba(0,230,118,0.9);}
+  .lamp-led.on-yellow{ background:radial-gradient(circle at 35% 30%, #ffe9b0, #ffb300); box-shadow:0 0 12px 3px rgba(255,179,0,0.9);}
+  .lamp-led.on-red{ background:radial-gradient(circle at 35% 30%, #ffb3b3, #ff3b3b); box-shadow:0 0 12px 3px rgba(255,59,59,0.9);}
+  .lamp-caption{ font-size:8.5px; color:var(--text-dim); letter-spacing:0.5px;}
+
+  #footer-note{
+    margin-top:12px; font-size:9.5px; color:var(--text-dim); text-align:center; letter-spacing:0.3px; opacity:0.8;
+  }
+
+  #viewport-hint{
+    position:fixed; bottom:16px; right:20px; font-size:10.5px; color:var(--text-dim);
+    background:rgba(10,16,24,0.5); padding:6px 10px; border-radius:6px; border:1px solid rgba(120,200,255,0.1);
+    z-index:10; letter-spacing:0.3px;
+  }
+
+  @media (max-width: 560px){
+    #hmi-panel{ width: calc(100% - 24px); left:12px; top:12px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="scene-container"></div>
+
+<div id="hmi-panel">
+  <div id="hmi-header">
+    <div id="hmi-title">SMART FACTORY HMI<b>CONVEYOR SORTING LINE #01</b></div>
+    <div id="status-badge" class="badge-stop">STOP</div>
+  </div>
+
+  <div id="btn-row">
+    <button id="btn-start" class="plc-btn"><span class="btn-dot"></span>START · 가동 시작</button>
+    <button id="btn-stop" class="plc-btn"><span class="btn-dot"></span>STOP · 비상 정지</button>
+    <button id="btn-defect" class="plc-btn"><span class="btn-dot"></span>불량 박스 강제 생성</button>
+  </div>
+
+  <div id="counter-grid">
+    <div class="counter-box" id="count-total">
+      <div class="counter-label">TOTAL</div>
+      <div class="counter-value" id="val-total">0</div>
+    </div>
+    <div class="counter-box" id="count-pass">
+      <div class="counter-label">PASS</div>
+      <div class="counter-value" id="val-pass">0</div>
+    </div>
+    <div class="counter-box" id="count-defect">
+      <div class="counter-label">DEFECT</div>
+      <div class="counter-value" id="val-defect">0</div>
+    </div>
+  </div>
+
+  <div id="lamp-row">
+    <div class="lamp-item"><div class="lamp-led" id="led-green"></div><div class="lamp-caption">RUN</div></div>
+    <div class="lamp-item"><div class="lamp-led" id="led-yellow"></div><div class="lamp-caption">SENSOR</div></div>
+    <div class="lamp-item"><div class="lamp-led" id="led-red"></div><div class="lamp-caption">STOP</div></div>
+  </div>
+
+  <div id="footer-note">PLC LADDER SIM · PHOTOSENSOR + PUSHER CYLINDER ACTIVE</div>
+</div>
+
+<div id="viewport-hint">마우스 드래그: 회전 · 휠: 확대/축소</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* =========================================================
+     0. GLOBAL STATE
+  ========================================================= */
+  const STATE = {
+    isRunning: false,
+    isProcessing: false,
+    beltSpeed: 2.6,          // units per second
+    totalCount: 0,
+    passCount: 0,
+    defectCount: 0,
+    spawnTimer: null
+  };
+
+  const CONVEYOR = {
+    zStart: -9.2,
+    zEnd: 9.6,
+    beltTopY: 1.0,
+    halfWidthX: 1.5
+  };
+  const SENSOR_Z = -0.6;
+  // The pusher MUST sit at the exact same Z as the sensor: the box freezes
+  // in place the instant it crosses the sensor beam (belt stops immediately),
+  // so the ejector has to be aligned with that stop point, not further down
+  // the line, or the rod visually misses the box entirely.
+  const PUSHER_Z = SENSOR_Z;
+  const SPAWN_SAFE_GAP = 1.6; // minimum Z gap required before a new box may spawn (prevents overlap)
+
+  let boxQueue = []; // {group, isDefect, triggered, pushed, id}
+  let boxIdCounter = 0;
+
+  /* =========================================================
+     1. THREE.JS BASE SETUP
+  ========================================================= */
+  const container = document.getElementById('scene-container');
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0f16);
+  scene.fog = new THREE.Fog(0x0a0f16, 26, 55);
+
+  const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 200);
+  camera.position.copy(new THREE.Vector3(15, 12, 18));
+  camera.lookAt(0,0,0);
+
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.outputColorSpace = THREE.SRGBColorSpace || THREE.sRGBEncoding;
+  container.appendChild(renderer.domElement);
+
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.target.set(0,1.2,0);
+  controls.enableDamping = true;
+  controls.dampingFactor = 0.08;
+  controls.maxPolarAngle = Math.PI * 0.49;
+  controls.minDistance = 6;
+  controls.maxDistance = 45;
+  controls.update();
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  /* =========================================================
+     2. LIGHTING
+  ========================================================= */
+  const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambient);
+
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  dirLight.position.set(12, 18, 10);
+  dirLight.castShadow = true;
+  dirLight.shadow.mapSize.width = 2048;
+  dirLight.shadow.mapSize.height = 2048;
+  dirLight.shadow.camera.near = 1;
+  dirLight.shadow.camera.far = 60;
+  dirLight.shadow.camera.left = -25;
+  dirLight.shadow.camera.right = 25;
+  dirLight.shadow.camera.top = 25;
+  dirLight.shadow.camera.bottom = -25;
+  dirLight.shadow.bias = -0.0015;
+  scene.add(dirLight);
+
+  const fillLight = new THREE.DirectionalLight(0x6fb8ff, 0.25);
+  fillLight.position.set(-10, 8, -14);
+  scene.add(fillLight);
+
+  const rimLight = new THREE.PointLight(0x2fd9ff, 0.5, 30);
+  rimLight.position.set(-4, 6, 6);
+  scene.add(rimLight);
+
+  /* =========================================================
+     3. FLOOR
+  ========================================================= */
+  const floorGeo = new THREE.PlaneGeometry(70, 70);
+  const floorMat = new THREE.MeshStandardMaterial({color:0x141c26, roughness:0.92, metalness:0.05});
+  const floor = new THREE.Mesh(floorGeo, floorMat);
+  floor.rotation.x = -Math.PI/2;
+  floor.position.y = 0;
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  const grid = new THREE.GridHelper(70, 70, 0x2fd9ff, 0x1a2733);
+  grid.position.y = 0.005;
+  grid.material.opacity = 0.35;
+  grid.material.transparent = true;
+  scene.add(grid);
+
+  // subtle raised platform under the machine
+  const platGeo = new THREE.BoxGeometry(7, 0.2, 22);
+  const platMat = new THREE.MeshStandardMaterial({color:0x1c2733, roughness:0.7, metalness:0.3});
+  const platform = new THREE.Mesh(platGeo, platMat);
+  platform.position.set(0, 0.1, 0.2);
+  platform.receiveShadow = true;
+  platform.castShadow = false;
+  scene.add(platform);
+
+  /* =========================================================
+     4. MATERIALS (shared)
+  ========================================================= */
+  const MAT_ALU = new THREE.MeshStandardMaterial({color:0x8b929c, metalness:0.85, roughness:0.22});
+  const MAT_ALU_DARK = new THREE.MeshStandardMaterial({color:0x565d66, metalness:0.8, roughness:0.28});
+  const MAT_BELT = new THREE.MeshStandardMaterial({color:0x14181d, metalness:0.15, roughness:0.85});
+  const MAT_BAR = new THREE.MeshStandardMaterial({color:0x2b2f36, metalness:0.4, roughness:0.55});
+  const MAT_PVC_YELLOW = new THREE.MeshStandardMaterial({color:0xffcc33, metalness:0.2, roughness:0.5});
+
+  /* =========================================================
+     5. CONVEYOR STRUCTURE
+  ========================================================= */
+  const conveyorGroup = new THREE.Group();
+  scene.add(conveyorGroup);
+
+  const beltLength = CONVEYOR.zEnd - CONVEYOR.zStart;
+  const beltCenterZ = (CONVEYOR.zStart + CONVEYOR.zEnd) / 2;
+
+  // side rails (aluminum extrusion look)
+  function makeRail(xPos){
+    const railGroup = new THREE.Group();
+    const railGeo = new THREE.BoxGeometry(0.18, 0.32, beltLength + 0.6);
+    const rail = new THREE.Mesh(railGeo, MAT_ALU);
+    rail.position.set(xPos, CONVEYOR.beltTopY + 0.16, beltCenterZ);
+    rail.castShadow = true; rail.receiveShadow = true;
+    railGroup.add(rail);
+
+    // top cap groove line (visual detail)
+    const grooveGeo = new THREE.BoxGeometry(0.03, 0.05, beltLength + 0.6);
+    const groove = new THREE.Mesh(grooveGeo, MAT_ALU_DARK);
+    groove.position.set(xPos, CONVEYOR.beltTopY + 0.33, beltCenterZ);
+    railGroup.add(groove);
+    return railGroup;
+  }
+  conveyorGroup.add(makeRail(-CONVEYOR.halfWidthX - 0.15));
+  conveyorGroup.add(makeRail(CONVEYOR.halfWidthX + 0.15));
+
+  // belt base (dark rubber surface)
+  const beltGeo = new THREE.BoxGeometry(CONVEYOR.halfWidthX*2, 0.12, beltLength);
+  const beltMesh = new THREE.Mesh(beltGeo, MAT_BELT);
+  beltMesh.position.set(0, CONVEYOR.beltTopY - 0.06, beltCenterZ);
+  beltMesh.receiveShadow = true;
+  beltMesh.castShadow = true;
+  conveyorGroup.add(beltMesh);
+
+  // end rollers (cylinders) at both ends
+  function makeRoller(zPos){
+    const rollerGeo = new THREE.CylinderGeometry(0.24, 0.24, CONVEYOR.halfWidthX*2 + 0.4, 20);
+    const roller = new THREE.Mesh(rollerGeo, MAT_ALU_DARK);
+    roller.rotation.z = Math.PI/2;
+    roller.position.set(0, CONVEYOR.beltTopY, zPos);
+    roller.castShadow = true;
+    return roller;
+  }
+  conveyorGroup.add(makeRoller(CONVEYOR.zStart - 0.2));
+  conveyorGroup.add(makeRoller(CONVEYOR.zEnd + 0.2));
+
+  // moving belt bars (tread pattern) -> creates the "rolling" illusion
+  const beltBars = [];
+  const BAR_SPACING = 0.55;
+  const barGeo = new THREE.BoxGeometry(CONVEYOR.halfWidthX*2 - 0.08, 0.045, 0.09);
+  for(let z = CONVEYOR.zStart; z <= CONVEYOR.zEnd; z += BAR_SPACING){
+    const bar = new THREE.Mesh(barGeo, MAT_BAR);
+    bar.position.set(0, CONVEYOR.beltTopY + 0.045, z);
+    bar.receiveShadow = true;
+    bar.castShadow = false;
+    conveyorGroup.add(bar);
+    beltBars.push(bar);
+  }
+
+  // legs
+  function makeLeg(x,z){
+    const legGroup = new THREE.Group();
+    const legGeo = new THREE.BoxGeometry(0.22, CONVEYOR.beltTopY - 0.1, 0.22);
+    const leg = new THREE.Mesh(legGeo, MAT_ALU);
+    leg.position.set(x, (CONVEYOR.beltTopY - 0.1)/2, z);
+    leg.castShadow = true; leg.receiveShadow = true;
+    legGroup.add(leg);
+    const footGeo = new THREE.BoxGeometry(0.4, 0.06, 0.4);
+    const foot = new THREE.Mesh(footGeo, MAT_ALU_DARK);
+    foot.position.set(x, 0.03, z);
+    foot.castShadow = true; foot.receiveShadow = true;
+    legGroup.add(foot);
+    return legGroup;
+  }
+  const legXs = [-CONVEYOR.halfWidthX - 0.1, CONVEYOR.halfWidthX + 0.1];
+  const legZs = [CONVEYOR.zStart + 0.5, -3, 3, CONVEYOR.zEnd - 0.5];
+  legXs.forEach(x => legZs.forEach(z => conveyorGroup.add(makeLeg(x,z))));
+
+  // cross braces
+  legZs.forEach(z=>{
+    const braceGeo = new THREE.BoxGeometry(CONVEYOR.halfWidthX*2 + 0.4, 0.08, 0.08);
+    const brace = new THREE.Mesh(braceGeo, MAT_ALU_DARK);
+    brace.position.set(0, (CONVEYOR.beltTopY - 0.1)*0.5, z);
+    brace.castShadow = true;
+    conveyorGroup.add(brace);
+  });
+
+  /* =========================================================
+     6. PHOTOSENSOR
+  ========================================================= */
+  const sensorGroup = new THREE.Group();
+  const sensorHeight = CONVEYOR.beltTopY + 0.55;
+
+  function makeSensorPost(xPos){
+    const g = new THREE.Group();
+    const poleGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.6, 12);
+    const pole = new THREE.Mesh(poleGeo, MAT_ALU_DARK);
+    pole.position.set(xPos, sensorHeight - 0.3 + 0.32, SENSOR_Z);
+    pole.castShadow = true;
+    g.add(pole);
+    const headGeo = new THREE.BoxGeometry(0.16, 0.16, 0.16);
+    const headMat = new THREE.MeshStandardMaterial({color:0x2c2f34, metalness:0.6, roughness:0.35});
+    const head = new THREE.Mesh(headGeo, headMat);
+    head.position.set(xPos, sensorHeight, SENSOR_Z);
+    head.castShadow = true;
+    g.add(head);
+    return g;
+  }
+  const sensorEmitterX = -CONVEYOR.halfWidthX - 0.35;
+  const sensorReceiverX = CONVEYOR.halfWidthX + 0.35;
+  sensorGroup.add(makeSensorPost(sensorEmitterX));
+  sensorGroup.add(makeSensorPost(sensorReceiverX));
+
+  // sensor LED indicator (small emissive sphere on emitter head)
+  const sensorLedMat = new THREE.MeshStandardMaterial({color:0x550000, emissive:0xff0000, emissiveIntensity:0.15});
+  const sensorLedGeo = new THREE.SphereGeometry(0.045, 12, 12);
+  const sensorLed = new THREE.Mesh(sensorLedGeo, sensorLedMat);
+  sensorLed.position.set(sensorEmitterX + 0.1, sensorHeight, SENSOR_Z);
+  sensorGroup.add(sensorLed);
+
+  // laser beam mesh (thin transparent red box spanning the belt width)
+  const laserLength = sensorReceiverX - sensorEmitterX;
+  const laserGeo = new THREE.BoxGeometry(laserLength, 0.025, 0.025);
+  const laserMat = new THREE.MeshBasicMaterial({color:0xff2222, transparent:true, opacity:0.4});
+  const laserBeam = new THREE.Mesh(laserGeo, laserMat);
+  laserBeam.position.set(0, sensorHeight, SENSOR_Z);
+  sensorGroup.add(laserBeam);
+
+  scene.add(sensorGroup);
+
+  /* =========================================================
+     7. PUSHER CYLINDER (defect ejector)
+  ========================================================= */
+  const pusherGroup = new THREE.Group();
+  const pusherY = CONVEYOR.beltTopY + 0.35;
+  const pusherRestX = -CONVEYOR.halfWidthX - 1.1;
+  const pusherExtendX = 0.05;
+
+  const cylBodyGeo = new THREE.CylinderGeometry(0.16, 0.16, 1.0, 20);
+  const cylBodyMat = new THREE.MeshStandardMaterial({color:0xb0b6bd, metalness:0.75, roughness:0.25});
+  const cylBody = new THREE.Mesh(cylBodyGeo, cylBodyMat);
+  cylBody.rotation.z = Math.PI/2;
+  cylBody.position.set(pusherRestX - 0.75, pusherY, PUSHER_Z);
+  cylBody.castShadow = true;
+  pusherGroup.add(cylBody);
+
+  // mounting bracket
+  const bracketGeo = new THREE.BoxGeometry(0.3, 0.5, 0.3);
+  const bracket = new THREE.Mesh(bracketGeo, MAT_ALU_DARK);
+  bracket.position.set(pusherRestX - 1.35, pusherY - 0.1, PUSHER_Z);
+  bracket.castShadow = true;
+  pusherGroup.add(bracket);
+
+  const rodGeo = new THREE.CylinderGeometry(0.055, 0.055, 1.3, 16);
+  const rodMat = new THREE.MeshStandardMaterial({color:0xe8ecef, metalness:0.9, roughness:0.12});
+  const pusherRod = new THREE.Mesh(rodGeo, rodMat);
+  pusherRod.rotation.z = Math.PI/2;
+  pusherRod.position.set(pusherRestX + 0.1, pusherY, PUSHER_Z);
+  pusherRod.castShadow = true;
+  pusherGroup.add(pusherRod);
+
+  const headPlateGeo = new THREE.BoxGeometry(0.1, 0.5, 0.7);
+  const headPlateMat = new THREE.MeshStandardMaterial({color:0xffb300, metalness:0.5, roughness:0.4});
+  const pusherHead = new THREE.Mesh(headPlateGeo, headPlateMat);
+  pusherHead.position.set(pusherRestX + 0.75, pusherY, PUSHER_Z);
+  pusherHead.castShadow = true;
+  pusherGroup.add(pusherHead);
+
+  scene.add(pusherGroup);
+
+  // reject bin
+  const binGroup = new THREE.Group();
+  const binMat = new THREE.MeshStandardMaterial({color:0x394450, metalness:0.5, roughness:0.6});
+  const binFloorGeo = new THREE.BoxGeometry(1.6, 0.1, 1.8);
+  const binFloor = new THREE.Mesh(binFloorGeo, binMat);
+  binFloor.position.set(CONVEYOR.halfWidthX + 2.4, 0.55, PUSHER_Z);
+  binFloor.receiveShadow = true; binFloor.castShadow = true;
+  binGroup.add(binFloor);
+  [[-0.75,0],[0.75,0],[0,-0.85],[0,0.85]].forEach(([dx,dz])=>{
+    const wallGeo = (dz===0)? new THREE.BoxGeometry(0.06,0.5,1.8) : new THREE.BoxGeometry(1.6,0.5,0.06);
+    const wall = new THREE.Mesh(wallGeo, binMat);
+    wall.position.set(CONVEYOR.halfWidthX + 2.4 + dx, 0.85, PUSHER_Z + dz);
+    wall.castShadow = true; wall.receiveShadow = true;
+    binGroup.add(wall);
+  });
+  scene.add(binGroup);
+
+  /* =========================================================
+     8. TOWER LAMP (3-color signal light)
+  ========================================================= */
+  const towerGroup = new THREE.Group();
+  const towerX = -CONVEYOR.halfWidthX - 1.3;
+  const towerZ = CONVEYOR.zStart + 0.4;
+
+  const poleGeo2 = new THREE.CylinderGeometry(0.06, 0.06, 2.4, 12);
+  const pole2 = new THREE.Mesh(poleGeo2, MAT_ALU_DARK);
+  pole2.position.set(towerX, CONVEYOR.beltTopY + 1.2, towerZ);
+  pole2.castShadow = true;
+  towerGroup.add(pole2);
+
+  const baseGeo2 = new THREE.CylinderGeometry(0.2, 0.24, 0.12, 16);
+  const base2 = new THREE.Mesh(baseGeo2, MAT_ALU_DARK);
+  base2.position.set(towerX, CONVEYOR.beltTopY, towerZ);
+  base2.castShadow = true;
+  towerGroup.add(base2);
+
+  function makeLampSegment(colorHex, yPos){
+    const geo = new THREE.CylinderGeometry(0.19, 0.19, 0.34, 20);
+    const mat = new THREE.MeshStandardMaterial({
+      color: colorHex, emissive: colorHex, emissiveIntensity: 0.06,
+      metalness:0.1, roughness:0.35, transparent:true, opacity:0.92
+    });
+    const seg = new THREE.Mesh(geo, mat);
+    seg.position.set(towerX, yPos, towerZ);
+    seg.castShadow = true;
+    towerGroup.add(seg);
+    return seg;
+  }
+  const lampRed = makeLampSegment(0xff2b2b, CONVEYOR.beltTopY + 2.55);
+  const lampYellow = makeLampSegment(0xffc400, CONVEYOR.beltTopY + 2.18);
+  const lampGreen = makeLampSegment(0x2bff6a, CONVEYOR.beltTopY + 1.81);
+
+  const capGeo = new THREE.ConeGeometry(0.2, 0.16, 20);
+  const cap = new THREE.Mesh(capGeo, MAT_ALU_DARK);
+  cap.position.set(towerX, CONVEYOR.beltTopY + 2.8, towerZ);
+  towerGroup.add(cap);
+
+  scene.add(towerGroup);
+
+  let yellowFlickerTween = null;
+  function setTowerLamp(state){
+    // state: 'green' | 'yellow' | 'red' | 'off'
+    if(yellowFlickerTween){ yellowFlickerTween.kill(); yellowFlickerTween = null; }
+    lampGreen.material.emissiveIntensity = 0.06;
+    lampYellow.material.emissiveIntensity = 0.06;
+    lampRed.material.emissiveIntensity = 0.06;
+    document.getElementById('led-green').classList.remove('on-green');
+    document.getElementById('led-yellow').classList.remove('on-yellow');
+    document.getElementById('led-red').classList.remove('on-red');
+
+    if(state === 'green'){
+      lampGreen.material.emissiveIntensity = 1.4;
+      document.getElementById('led-green').classList.add('on-green');
+    } else if(state === 'red'){
+      lampRed.material.emissiveIntensity = 1.4;
+      document.getElementById('led-red').classList.add('on-red');
+    } else if(state === 'yellow'){
+      document.getElementById('led-yellow').classList.add('on-yellow');
+      yellowFlickerTween = gsap.to(lampYellow.material, {
+        emissiveIntensity: 1.5, duration:0.28, yoyo:true, repeat:-1, ease:'power1.inOut'
+      });
+    }
+  }
+  setTowerLamp('red'); // idle default state
+
+  /* =========================================================
+     9. BOX FACTORY
+  ========================================================= */
+  const BOX_W = 1.0, BOX_H = 0.8, BOX_D = 1.0;
+  const boxRestY = CONVEYOR.beltTopY + BOX_H/2 + 0.02;
+
+  function createNormalBox(){
+    const g = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({color:0xb5813f, roughness:0.85, metalness:0.02});
+    const body = new THREE.Mesh(new THREE.BoxGeometry(BOX_W, BOX_H, BOX_D), bodyMat);
+    body.castShadow = true; body.receiveShadow = true;
+    g.add(body);
+
+    const tapeMat = new THREE.MeshStandardMaterial({color:0xe8d9b0, roughness:0.6});
+    const tapeZ = new THREE.Mesh(new THREE.BoxGeometry(BOX_W + 0.01, 0.09, BOX_D + 0.01), tapeMat);
+    tapeZ.position.y = 0;
+    g.add(tapeZ);
+    const tapeX = new THREE.Mesh(new THREE.BoxGeometry(0.09, BOX_H + 0.01, BOX_D + 0.02), tapeMat);
+    g.add(tapeX);
+
+    // top flap seam lines
+    const seamMat = new THREE.MeshStandardMaterial({color:0x8f6428, roughness:0.8});
+    const seam1 = new THREE.Mesh(new THREE.BoxGeometry(BOX_W*0.98, 0.02, 0.02), seamMat);
+    seam1.position.set(0, BOX_H/2 + 0.001, BOX_D*0.25);
+    g.add(seam1);
+    const seam2 = seam1.clone();
+    seam2.position.z = -BOX_D*0.25;
+    g.add(seam2);
+
+    g.position.y = boxRestY;
+    return g;
+  }
+
+  // wraps a bright yellow/black hazard-tape band around all 4 vertical faces
+  // of a box so the defect box reads as "danger" from any viewing angle,
+  // not just from directly above.
+  const HAZARD_YELLOW = new THREE.MeshStandardMaterial({color:0xffcc00, roughness:0.45, metalness:0.05});
+  const HAZARD_BLACK = new THREE.MeshStandardMaterial({color:0x0d0d0d, roughness:0.6, metalness:0.05});
+  function addHazardBand(g, w, h, d, bandY, bandH){
+    // yellow band, wrapped on all four sides
+    const bandFB = new THREE.BoxGeometry(w + 0.02, bandH, 0.03);
+    const front = new THREE.Mesh(bandFB, HAZARD_YELLOW);
+    front.position.set(0, bandY, d/2 + 0.006);
+    g.add(front);
+    const back = front.clone(); back.position.z = -d/2 - 0.006; g.add(back);
+
+    const bandLR = new THREE.BoxGeometry(0.03, bandH, d + 0.02);
+    const left = new THREE.Mesh(bandLR, HAZARD_YELLOW);
+    left.position.set(-w/2 - 0.006, bandY, 0);
+    g.add(left);
+    const right = left.clone(); right.position.x = w/2 + 0.006; g.add(right);
+
+    // diagonal black stripes on front/back faces (rotate about Z, the face normal)
+    const stripeW = 0.1;
+    const stripeCount = 4;
+    for(let i=0;i<stripeCount;i++){
+      const t = (i + 0.5) / stripeCount;
+      const x = -w/2 + t * w;
+      const stripeGeo = new THREE.BoxGeometry(stripeW, bandH * 1.7, 0.012);
+      const sFront = new THREE.Mesh(stripeGeo, HAZARD_BLACK);
+      sFront.rotation.z = Math.PI/4;
+      sFront.position.set(x, bandY, d/2 + 0.014);
+      g.add(sFront);
+      const sBack = sFront.clone();
+      sBack.position.z = -d/2 - 0.014;
+      g.add(sBack);
+    }
+    // diagonal black stripes on left/right faces (rotate about X, the face normal)
+    for(let i=0;i<stripeCount;i++){
+      const t = (i + 0.5) / stripeCount;
+      const z = -d/2 + t * d;
+      const stripeGeo = new THREE.BoxGeometry(0.012, bandH * 1.7, stripeW);
+      const sLeft = new THREE.Mesh(stripeGeo, HAZARD_BLACK);
+      sLeft.rotation.x = Math.PI/4;
+      sLeft.position.set(-w/2 - 0.014, bandY, z);
+      g.add(sLeft);
+      const sRight = sLeft.clone();
+      sRight.position.x = w/2 + 0.014;
+      g.add(sRight);
+    }
+  }
+
+  function createDefectBox(){
+    const g = new THREE.Group();
+    // saturated, self-lit red so it reads as "danger" even in shadow,
+    // clearly separated from the brown/tan cardboard tone of normal boxes
+    const bodyMat = new THREE.MeshStandardMaterial({color:0xe8241a, roughness:0.5, metalness:0.05, emissive:0x5c0a05, emissiveIntensity:0.55});
+    const body = new THREE.Mesh(new THREE.BoxGeometry(BOX_W, BOX_H, BOX_D), bodyMat);
+    body.castShadow = true; body.receiveShadow = true;
+    g.add(body);
+
+    // hazard-tape band wrapped around the whole box, visible from every side
+    addHazardBand(g, BOX_W, BOX_H, BOX_D, 0, BOX_H * 0.34);
+
+    // warning stripe X pattern on top (visible from the default aerial camera angle)
+    const stripeMat = new THREE.MeshStandardMaterial({color:0x0d0d0d, roughness:0.6});
+    const stripe1 = new THREE.Mesh(new THREE.BoxGeometry(BOX_W*1.32, 0.02, 0.14), stripeMat);
+    stripe1.position.y = BOX_H/2 + 0.005;
+    stripe1.rotation.y = Math.PI/4;
+    g.add(stripe1);
+    const stripe2 = stripe1.clone();
+    stripe2.rotation.y = -Math.PI/4;
+    g.add(stripe2);
+
+    // pulsing warning beacon on top
+    const beaconMat = new THREE.MeshStandardMaterial({color:0xff5500, emissive:0xff3300, emissiveIntensity:1.4});
+    const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.075,12,12), beaconMat);
+    beacon.position.y = BOX_H/2 + 0.13;
+    g.add(beacon);
+    gsap.to(beaconMat, {emissiveIntensity:0.4, duration:0.5, yoyo:true, repeat:-1, ease:'sine.inOut'});
+
+    g.position.y = boxRestY;
+    return g;
+  }
+
+  const SPAWN_Z = CONVEYOR.zStart - 0.6;
+
+  // Prevents two boxes from ever being created on top of each other: if the
+  // conveyor is stopped (sensor processing / STOP) a box can still be sitting
+  // right at the spawn point, so a new spawn must wait until it has cleared.
+  function canSpawnNow(){
+    for(let i=boxQueue.length-1;i>=0;i--){
+      const b = boxQueue[i];
+      if(b.removed) continue;
+      return (b.group.position.z - SPAWN_Z) >= SPAWN_SAFE_GAP;
+    }
+    return true;
+  }
+
+  function spawnBox(forceDefect){
+    const isDefect = forceDefect === true ? true : (Math.random() < 0.3);
+    const group = isDefect ? createDefectBox() : createNormalBox();
+    group.position.x = 0;
+    group.position.z = SPAWN_Z;
+    scene.add(group);
+
+    const boxObj = {
+      id: boxIdCounter++,
+      group: group,
+      isDefect: isDefect,
+      triggered: false,
+      state: 'moving' // moving | waiting | ejecting | resuming | done
+    };
+    boxQueue.push(boxObj);
+    STATE.totalCount++;
+    updateCounters();
+  }
+
+  // Safe entry point used by the timer / buttons: spawns immediately if the
+  // spawn point is clear, otherwise retries shortly after instead of
+  // stacking a new box on top of one that hasn't moved away yet.
+  function trySpawnBox(forceDefect, attemptsLeft){
+    if(attemptsLeft === undefined) attemptsLeft = 6;
+    if(canSpawnNow()){
+      spawnBox(forceDefect);
+    } else if(attemptsLeft > 0){
+      gsap.delayedCall(0.3, () => trySpawnBox(forceDefect, attemptsLeft - 1));
+    }
+  }
+
+  /* =========================================================
+     10. UI HELPERS
+  ========================================================= */
+  const elBadge = document.getElementById('status-badge');
+  const elTotal = document.getElementById('val-total');
+  const elPass = document.getElementById('val-pass');
+  const elDefect = document.getElementById('val-defect');
+  const btnStart = document.getElementById('btn-start');
+  const btnStop = document.getElementById('btn-stop');
+  const btnDefect = document.getElementById('btn-defect');
+
+  function updateCounters(){
+    elTotal.textContent = STATE.totalCount;
+    elPass.textContent = STATE.passCount;
+    elDefect.textContent = STATE.defectCount;
+  }
+
+  function updateStatusBadge(){
+    if(STATE.isProcessing){
+      elBadge.textContent = 'SENSOR DETECTED';
+      elBadge.className = 'badge-sensor';
+    } else if(STATE.isRunning){
+      elBadge.textContent = 'RUN';
+      elBadge.className = 'badge-run';
+    } else {
+      elBadge.textContent = 'STOP';
+      elBadge.className = 'badge-stop';
+    }
+  }
+
+  function setButtonsForRunning(running){
+    btnStart.disabled = running;
+    btnStop.disabled = !running;
+  }
+
+  /* =========================================================
+     11. PLC CONTROL LOGIC
+  ========================================================= */
+  function startLine(){
+    if(STATE.isRunning) return;
+    STATE.isRunning = true;
+    setTowerLamp(STATE.isProcessing ? 'yellow' : 'green');
+    setButtonsForRunning(true);
+    updateStatusBadge();
+
+    if(STATE.spawnTimer) clearInterval(STATE.spawnTimer);
+    STATE.spawnTimer = setInterval(() => {
+      if(STATE.isRunning) trySpawnBox(false);
+    }, 3000);
+    // spawn one immediately for responsiveness
+    trySpawnBox(false);
+  }
+
+  function stopLine(){
+    STATE.isRunning = false;
+    if(STATE.spawnTimer){ clearInterval(STATE.spawnTimer); STATE.spawnTimer = null; }
+    if(!STATE.isProcessing) setTowerLamp('red');
+    setButtonsForRunning(false);
+    updateStatusBadge();
+  }
+
+  function forceDefectSpawn(){
+    trySpawnBox(true);
+  }
+
+  btnStart.addEventListener('click', startLine);
+  btnStop.addEventListener('click', stopLine);
+  btnDefect.addEventListener('click', forceDefectSpawn);
+  setButtonsForRunning(false);
+  updateStatusBadge();
+  updateCounters();
+
+  /* =========================================================
+     12. SENSOR / PUSHER SEQUENCE
+  ========================================================= */
+  function flashSensorLed(intense){
+    sensorLedMat.emissiveIntensity = intense ? 1.5 : 0.15;
+    sensorLedMat.emissive.set(intense ? 0xff0000 : 0x550000);
+  }
+  function flashLaser(intense){
+    laserMat.opacity = intense ? 0.85 : 0.4;
+    laserMat.color.set(intense ? 0xff5555 : 0xff2222);
+  }
+
+  function handleSensorTrigger(boxObj){
+    STATE.isProcessing = true;
+    boxObj.triggered = true;
+    boxObj.state = 'waiting';
+    setTowerLamp('yellow');
+    flashSensorLed(true);
+    flashLaser(true);
+    updateStatusBadge();
+
+    if(boxObj.isDefect){
+      gsap.delayedCall(0.5, () => ejectDefectBox(boxObj));
+    } else {
+      gsap.delayedCall(1.5, () => resumeAfterPass(boxObj));
+    }
+  }
+
+  function resumeAfterPass(boxObj){
+    boxObj.state = 'moving';
+    STATE.isProcessing = false;
+    flashSensorLed(false);
+    flashLaser(false);
+    setTowerLamp(STATE.isRunning ? 'green' : 'red');
+    updateStatusBadge();
+  }
+
+  function ejectDefectBox(boxObj){
+    boxObj.state = 'ejecting';
+    const targetX = CONVEYOR.halfWidthX + 2.4;
+
+    // extend piston rod + head
+    gsap.to(pusherRod.position, {x: pusherRestX + 0.1 + 1.35, duration:0.35, ease:'power2.out'});
+    gsap.to(pusherHead.position, {x: pusherRestX + 0.75 + 1.35, duration:0.35, ease:'power2.out', onComplete:()=>{
+      // push the box across
+      gsap.to(boxObj.group.position, {
+        x: targetX, duration:0.5, ease:'power1.inOut',
+        onComplete:()=>{
+          // retract piston
+          gsap.to(pusherRod.position, {x: pusherRestX + 0.1, duration:0.4, ease:'power2.in'});
+          gsap.to(pusherHead.position, {x: pusherRestX + 0.75, duration:0.4, ease:'power2.in'});
+
+          // drop box into bin then remove
+          gsap.to(boxObj.group.position, {y: boxRestY - 0.55, duration:0.35, delay:0.05, ease:'bounce.out'});
+          gsap.to(boxObj.group.rotation, {z: 0.5, duration:0.35, delay:0.05});
+          gsap.delayedCall(0.55, () => {
+            scene.remove(boxObj.group);
+            boxObj.state = 'done';
+            boxObj.removed = true;
+            STATE.defectCount++;
+            updateCounters();
+
+            STATE.isProcessing = false;
+            flashSensorLed(false);
+            flashLaser(false);
+            setTowerLamp(STATE.isRunning ? 'green' : 'red');
+            updateStatusBadge();
+          });
+        }
+      });
+    }});
+  }
+
+  /* =========================================================
+     13. MAIN ANIMATION LOOP
+  ========================================================= */
+  const clock = new THREE.Clock();
+
+  function animate(){
+    requestAnimationFrame(animate);
+    const delta = Math.min(clock.getDelta(), 0.05);
+
+    const beltActive = STATE.isRunning && !STATE.isProcessing;
+
+    if(beltActive){
+      // move belt tread bars (Z axis recycle -> rolling illusion)
+      const step = STATE.beltSpeed * delta;
+      for(let i=0;i<beltBars.length;i++){
+        const bar = beltBars[i];
+        bar.position.z += step;
+        if(bar.position.z > CONVEYOR.zEnd){
+          bar.position.z -= (CONVEYOR.zEnd - CONVEYOR.zStart + BAR_SPACING);
+        }
+      }
+
+      // move boxes that are actively traveling (not waiting/ejecting/done)
+      for(let i=0;i<boxQueue.length;i++){
+        const b = boxQueue[i];
+        if(b.state === 'moving'){
+          b.group.position.z += step;
+          // gentle bounce for realism
+          b.group.rotation.y = Math.sin(performance.now()*0.002 + b.id) * 0.01;
+        }
+      }
+    }
+
+    // sensor detection check (only when not already processing)
+    if(!STATE.isProcessing){
+      for(let i=0;i<boxQueue.length;i++){
+        const b = boxQueue[i];
+        if(b.state === 'moving' && !b.triggered && b.group.position.z >= SENSOR_Z){
+          handleSensorTrigger(b);
+          break;
+        }
+      }
+    }
+
+    // remove boxes that passed the end of the conveyor (normal pass-through)
+    for(let i=boxQueue.length-1;i>=0;i--){
+      const b = boxQueue[i];
+      if(b.state === 'moving' && b.group.position.z > CONVEYOR.zEnd + 0.8){
+        scene.remove(b.group);
+        b.removed = true;
+        if(!b.isDefect){
+          STATE.passCount++;
+          updateCounters();
+        }
+      }
+    }
+
+    // garbage collect finished boxes from the queue
+    if(boxQueue.length > 40){
+      boxQueue = boxQueue.filter(b => !b.removed);
+    } else {
+      boxQueue = boxQueue.filter(b => !b.removed);
+    }
+
+    controls.update();
+    renderer.render(scene, camera);
+  }
+
+  animate();
+
+})();
+</script>
+</body>
+</html>
